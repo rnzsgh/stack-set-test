@@ -7,9 +7,11 @@ This POC is designed to showcase what a global deployment of a system would look
 
 * [Amazon Virtual Private Cloud](https://aws.amazon.com/vpc/)
 * [Amazon EC2 Security Groups for Linux Instances](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-network-security.html)
-* [Application Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html)
 * [Amazon EC2 Instances](https://aws.amazon.com/ec2/)
+* [Auto Scaling Group](https://docs.aws.amazon.com/autoscaling/ec2/userguide/AutoScalingGroup.html)
+* [Application Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html)
 * [SSL/TLS Certificates via AWS Certificate Manager](https://aws.amazon.com/certificate-manager/)
+* [CloudFormation Custom Resource](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-custom-resources.html) (to validate the TLS cert via DNS)
 
 ## Setup
 
