@@ -1,7 +1,7 @@
 
 # StackSets POC
 
-This is an example of a CloudFormation template that can be deployed in multiple regions in the same AWS account using [StackSets](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-concepts.html).
+This is an example of a CloudFormation template that can be deployed in multiple [AWS regions](https://aws.amazon.com/about-aws/global-infrastructure/) in the same account using [StackSets](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-concepts.html).
 
 This POC is designed to showcase what a global deployment of a system would look like. In stack-set.cfn.yml CloudFormation template, we deploy:
 
