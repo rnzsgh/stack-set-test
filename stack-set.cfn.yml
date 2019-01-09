@@ -1,7 +1,7 @@
 ---
 AWSTemplateFormatVersion: 2010-09-09
 
-Description: POC to showcase stack sets in different regions, but the same account
+Description: POC to showcase StackSets in different regions, but the same account
 
 
 Parameters:
