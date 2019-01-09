@@ -16,7 +16,7 @@ This POC is designed to showcase what a global deployment of a system would look
 
 ## Setup
 
-Make sure you have the proper roles created:
+Ensure that you have the proper roles created:
 
 * [Prerequisites: Granting Permissions for Stack Set Operations](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-prereqs.html)
 * [3rd Party Overview)(https://sanderknape.com/2017/07/cloudformation-stacksets-automated-cross-account-region-deployments/)
