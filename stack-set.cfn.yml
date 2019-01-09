@@ -1,0 +1,474 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: POC to showcase stack sets in different regions, but the same account
+
+
+Parameters:
+
+  KeyName:
+    Description: EC2 key pair name for bastion host SSH access
+    Type: AWS::EC2::KeyPair::KeyName
+
+  Environment:
+    Description: The environment name
+    Type: String
+    MinLength: 1
+    MaxLength: 10
+
+  HostedZoneId:
+    Type: String
+    Description: The hosted zone id
+    MinLength: 1
+    MaxLength: 50
+
+  HostedZoneName:
+    Type: String
+    Description: The Amazon Route 53 Hosted Zone Name - do not include a period at the end
+    AllowedPattern: "(^$|^((?!-)[A-Za-z0-9-]{1,63}(?<!-)\\.)+[A-Za-z]{2,6}$)"
+    ConstraintDescription: Please enter a valid Route 53 Hosted Zone Name
+
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+Resources:
+
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub '*.${HostedZoneName}'
+      ValidationMethod: DNS
+
+  ValidateCertCustomResource:
+    Type: Custom::CustomResource
+    Properties:
+      ServiceToken: !GetAtt CustomResourceLambda.Arn
+      StackName: !Ref AWS::StackName
+      HostedZoneId: !Ref HostedZoneId
+
+  CustomResourceLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          import json, boto3, time
+          from botocore.vendored import requests
+          def handler(event, context):
+            response = {
+              'Status': 'SUCCESS',
+              "Reason": "See the details in CloudWatch Log Stream: " + context.log_stream_name,
+              'PhysicalResourceId': context.log_stream_name,
+              'StackId': event['StackId'],
+              'RequestId': event['RequestId'],
+              'LogicalResourceId': event['LogicalResourceId'],
+              'Data': {"Message": "Resource creation successful!"},
+            }
+            dns_record = None
+            dns_record_value = None
+            try:
+              client = boto3.client('cloudformation')
+              dns_client = boto3.client('route53')
+              zone_id = event['ResourceProperties']['HostedZoneId']
+              stack_name = event['ResourceProperties']['StackName']
+
+              if event['RequestType'] == 'Create':
+                creating = True
+                while creating:
+                  # If you have a lot of resources in your CFN template, you may need to add
+                  # iteration logic over the events
+                  for row in client.describe_stack_events(StackName=stack_name)['StackEvents']:
+                    if 'ResourceType' in row and row['ResourceType'] == 'AWS::CertificateManager::Certificate':
+                      if 'ResourceStatusReason' in row and row['ResourceStatusReason'].startswith('Content of DNS Record is:'):
+                        vals = row['ResourceStatusReason'].replace('Content of DNS Record is: {Name: ', '') \
+                                                          .replace(',Type: CNAME,Value:', '') \
+                                                          .replace('}', '') \
+                                                          .split()
+                        dns_client.change_resource_record_sets(HostedZoneId=zone_id, ChangeBatch={
+                          'Changes': [{
+                            'Action': 'UPSERT',
+                            'ResourceRecordSet': { 'Name': vals[0], 'Type': 'CNAME', 'TTL': 300, 'ResourceRecords': [{ 'Value': vals[1] }] }
+                          }]
+                        })
+                        dns_record = vals[0]
+                        dns_record_value = vals[1]
+                        creating = False
+                        break
+                  time.sleep(2)
+              if event['RequestType'] == 'Delete':
+                for output in client.describe_stacks(StackName=event['StackId'])['Stacks'][0]['Outputs']:
+                  if output['OutputKey'] == 'CertDnsValidationRecord':
+                    dns_record =  output['OutputValue']
+                  if output['OutputKey'] == 'CertDnsValidationRecordValue':
+                    dns_record_value =  output['OutputValue']
+                dns_client.change_resource_record_sets(HostedZoneId=zone_id, ChangeBatch={
+                  'Changes': [{
+                    'Action': 'DELETE',
+                    'ResourceRecordSet': {
+                      'Name': dns_record, 'Type': 'CNAME', 'TTL': 300,
+                      'ResourceRecords': [ { 'Value': dns_record_value } ]
+                    }
+                  }]
+                })
+            except Exception as e:
+              print(e)
+              response['Status'] = 'FAILED'
+              response["Reason"] = 'Error: ' + str(e)
+              response['Data'] = {"Message": "Custom resource failed"}
+            if dns_record is not None and dns_record_value is not None:
+              response['Data'] = { "DnsRecord": dns_record, "DnsRecordValue": dns_record_value }
+            response_body = json.dumps(response)
+            headers = {'content-type': '', "content-length": len(response_body) }
+            put_response = requests.put(event['ResponseURL'], headers=headers, data=response_body)
+            return response
+      Handler: index.handler
+      Role: !GetAtt CustomResourceLambdaExecutionRole.Arn
+      Runtime: python2.7
+      Timeout: 900
+
+  CustomResourceLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaENIManagementAccess
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - PolicyName: custom-resource
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*
+                Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+              - Resource: !Sub arn:aws:route53:::hostedzone/${HostedZoneId}
+                Effect: Allow
+                Action:
+                  - route53:ChangeResourceRecordSets
+
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.50.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: Name
+        Value: !Ref AWS::StackName
+
+  PublicSubnet0:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.50.0.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-PublicSubnet0
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.50.1.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-PublicSubnet1
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-igw
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-public-igw
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation0:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet0
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetNetworkAclAssociation0:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet0
+      NetworkAclId: !GetAtt Vpc.DefaultNetworkAcl
+
+  PublicSubnetNetworkAclAssociation1:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      NetworkAclId: !GetAtt Vpc.DefaultNetworkAcl
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP/HTTPs ingress
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        IpProtocol: tcp
+        ToPort: 443
+        FromPort: 443
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-AlbSecurityGroup
+
+  AlbSecurityGroupToAppEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref AlbSecurityGroup
+      IpProtocol: tcp
+      ToPort: 80
+      FromPort: 80
+      DestinationSecurityGroupId: !Ref AppSecurityGroup
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable access from Alb to app
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+      - SourceSecurityGroupId: !Ref AlbSecurityGroup
+        IpProtocol: tcp
+        ToPort: 80
+        FromPort: 80
+      - CidrIp: 0.0.0.0/0 # You really want to ip restrict SSH access
+        IpProtocol: tcp
+        ToPort: 22
+        FromPort: 22
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-AppSecurityGroup
+
+  AppSecurityGroupFromAlbIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      ToPort: 80
+      FromPort: 80
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - !Ref PublicSubnet0
+        - !Ref PublicSubnet1
+      SecurityGroups:
+        - !GetAtt AlbSecurityGroup.GroupId
+      Tags:
+      - Key: Stack
+        Value: !Ref AWS::StackName
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref Vpc
+      Port: 80
+      Protocol: HTTP
+      Matcher:
+        HttpCode: 200
+      TargetType: instance
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      TargetGroupAttributes:
+      - Key: deregistration_delay.timeout_seconds
+        Value: 300
+      Tags:
+      - Key: Stack
+        Value: !Ref AWS::StackName
+
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref Certificate
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref TargetGroup
+    DependsOn:
+      - TargetGroup
+      - ApplicationLoadBalancer
+
+  AlbRoute53Record:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      Name: !Sub ${AWS::Region}-${Environment}.${HostedZoneName}
+      HostedZoneName: !Sub ${HostedZoneName}.
+      Type: A
+      AliasTarget:
+        HostedZoneId: !GetAtt ApplicationLoadBalancer.CanonicalHostedZoneID
+        DNSName: !GetAtt ApplicationLoadBalancer.DNSName
+
+  LaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: c5.large
+      KeyName: !Ref KeyName
+      AssociatePublicIpAddress: true
+      SecurityGroups:
+        - !GetAtt AppSecurityGroup.GroupId
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          amazon-linux-extras install nginx1.12
+          systemctl start nginx.service
+          systemctl enable nginx.service
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet0
+        - !Ref PublicSubnet1
+      DesiredCapacity: 3
+      MaxSize: 5
+      MinSize: 3
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 5
+      LaunchConfigurationName: !Ref LaunchConfiguration
+      TargetGroupARNs:
+        - !Ref TargetGroup
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+          PropagateAtLaunch: true
+    DependsOn:
+      - TargetGroup
+      - LaunchConfiguration
+
+
+Outputs:
+
+  Name:
+    Description: Stack Name
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub ${AWS::StackName}-Name
+
+  VpcId:
+    Description: Vpc Id
+    Value: !Ref Vpc
+    Export:
+      Name: !Sub ${AWS::StackName}-VpcId
+
+  PublicSubnet0:
+    Description: Public subnet 0 ID
+    Value: !Ref PublicSubnet0
+    Export:
+      Name: !Sub ${AWS::StackName}-PublicSubnetId0
+
+  PublicSubnet1:
+    Description: Public subnet 1 ID
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub ${AWS::StackName}-PublicSubnetId1
+
+  AlbSecurityGroupId:
+    Description: Security group ID for Internet-facing Alb
+    Value: !GetAtt AlbSecurityGroup.GroupId
+    Export:
+      Name: !Sub ${AWS::StackName}-AlbSecurityGroupId
+
+  AppSecurityGroupId:
+    Description: Security group ID for app behind Alb
+    Value: !GetAtt AppSecurityGroup.GroupId
+    Export:
+      Name: !Sub ${AWS::StackName}-AppSecurityGroupId
+
+  ApplicationLoadBalancerArn:
+    Value: !Ref ApplicationLoadBalancer
+    Export:
+      Name: !Sub ${AWS::StackName}-ApplicationLoadBalancerArn
+
+  ApplicationLoadBalancerDnsName:
+    Value: !Sub ${AWS::Region}-${Environment}.${HostedZoneName}
+    Export:
+      Name: !Sub ${AWS::StackName}-ApplicationLoadBalancerDnsName
+
+  ApplicationLoadBalancerBaseDnsName:
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub ${AWS::StackName}-ApplicationLoadBalancerBaseDnsName
+
+  ApplicationLoadBalancerCanonicalHostedZoneId:
+    Value: !GetAtt ApplicationLoadBalancer.CanonicalHostedZoneID
+    Export:
+      Name: !Sub ${AWS::StackName}-ApplicationLoadBalancerCanonicalHostedZoneId
+
+  ApplicationLoadBalancerName:
+    Value: !GetAtt ApplicationLoadBalancer.LoadBalancerName
+    Export:
+      Name: !Sub ${AWS::StackName}-ApplicationLoadBalancerName
+
+  ApplicationLoadBalancerListenerArn:
+    Value: !Ref LoadBalancerListener
+    Export:
+      Name: !Sub ${AWS::StackName}-ApplicationLoadBalancerListenerArn
+
+  CertArn:
+    Value: !Ref Certificate
+    Export:
+      Name: !Sub ${AWS::StackName}-Certificate
+
+  CertDnsValidationRecord:
+    Description: The DNS CNAME created in Route 53 for cert validation
+    Value: !GetAtt ValidateCertCustomResource.DnsRecord
+    Export:
+      Name: !Sub ${AWS::StackName}-CertDnsValidationRecord
+
+  CertDnsValidationRecordValue:
+    Description: The DNS CNAME value created in Route 53 for cert validation
+    Value: !GetAtt ValidateCertCustomResource.DnsRecordValue
+    Export:
+      Name: !Sub ${AWS::StackName}-CertDnsValidationRecordValue
+
+
