@@ -348,6 +348,19 @@ Resources:
         HostedZoneId: !GetAtt ApplicationLoadBalancer.CanonicalHostedZoneID
         DNSName: !GetAtt ApplicationLoadBalancer.DNSName
 
+  GlobalS3Record:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      Name: !Sub global-${Environment}.${HostedZoneName}
+      HostedZoneName: !Sub ${HostedZoneName}.
+      Region: !Ref AWS::Region
+      SetIdentifier: !Sub ${AWS::Region}-${Environment}.${HostedZoneName}
+      Type: A
+      AliasTarget:
+        HostedZoneId: !Ref HostedZoneId
+        DNSName: !Sub ${AWS::Region}-${Environment}.${HostedZoneName}
+    DependsOn: AlbRoute53Record
+
   LaunchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
