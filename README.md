@@ -18,7 +18,7 @@ This POC is designed to showcase what a global deployment of a system would look
 
 Ensure that you have the proper roles created:
 
-* [Prerequisites: Granting Permissions for Stack Set Operations](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-prereqs.html)
+* [Prerequisites: Granting Permissions for StackSet Operations](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-prereqs.html)
 * [3rd Party Overview)(https://sanderknape.com/2017/07/cloudformation-stacksets-automated-cross-account-region-deployments/)
 
 Create an [Amazon EC2 Key Pair](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-key-pairs.html) in each region you would like to deploy to with the *same* name. Make sure you save the private keys someplace safe.
@@ -27,7 +27,7 @@ You must have a domain hosted by [Amazon Route 53](https://aws.amazon.com/route5
 
 ## Deployment
 
-Create the Stack Set:
+Create the StackSet:
 
 ```
 aws cloudformation create-stack \
