@@ -55,4 +55,8 @@ aws cloudformation create-stack-instances \
 Remove the stack instances from the StackSet. This tears down the CloudFormation stack in each region. Once the stack instances are removed, you can delete the stack set.
 
 
+## Note
+
+On termination, the CloudFormation custom resource in each stack attempts to delete the DNS validation CNAME, which is identical for all regions. Certificates are also deleted on termination of a stack.
+
 
