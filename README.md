@@ -49,3 +49,9 @@ aws cloudformation create-stack-instances \
   --regions us-east-2 us-east-1
 ```
 
+## Clenup:
+
+Remove the stack instances from the StackSet. This tears down the CloudFormation stack in each region. Once the stack instances are removed, you can delete the stack set.
+
+
+
