@@ -47,7 +47,7 @@ Create the Stack Instances:
 aws cloudformation create-stack-instances \
   --stack-set-name NAME_USED_FOR_STACK_SET \
   --accounts YOUR_ACCOUNT_ID \
-  --regions us-east-2 us-east-1
+  --regions us-east-2 us-east-1 us-west-2
 ```
 
 ## Cleanup
